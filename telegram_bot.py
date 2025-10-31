@@ -58,7 +58,15 @@ def send_telegram_message(text: str, chat_id: int = None) -> bool:
             "chat_id": target_chat_id,
             "text": text,
             "parse_mode": "Markdown"
-        }def query_perplexity(question: str) -> dict:
+        }
+        response = requests.post(url, json=data, timeout=10)
+        return response.json().get('ok', False)
+    except Exception as e:
+        logger.error(f"Error enviando mensaje: {e}")
+        return False
+
+
+def query_perplexity(question: str) -> dict:
     """Consultar Perplexity AI directamente"""
     try:
         if not PERPLEXITY_API_KEY:
@@ -119,19 +127,6 @@ def send_telegram_message(text: str, chat_id: int = None) -> bool:
             return {
                 "success": False,
                 "error": f"Error API: {response.status_code} - {error_text[:100]}"
-            }
-            
-    except Exception as e:
-        logger.error(f"Error en Perplexity: {e}")
-        return {
-            "success": False,
-            "error": str(e)
-        }
-        else:
-            logger.error(f"Error Perplexity: {response.status_code} - {response.text}")
-            return {
-                "success": False,
-                "error": f"Error API: {response.status_code}"
             }
             
     except Exception as e:
