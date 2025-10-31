@@ -82,7 +82,7 @@ def query_perplexity(question: str) -> dict:
         }
         
         payload = {
-            "model": "llama-3.1-sonar-small-128k-online",
+            "model": "sonar-small-online",
             "messages": [
                 {
                     "role": "system",
