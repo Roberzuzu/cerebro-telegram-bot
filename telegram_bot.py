@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Telegram Bot - AI Product Processor (Webhook Version)
-Recibe mensajes vía webhook y procesa productos automáticamente
+Telegram Bot - AI Product Processor (Webhook + Perplexity Integration)
+Recibe mensajes vía webhook y procesa con Perplexity AI
 """
 
 import os
@@ -26,6 +26,7 @@ except ImportError:
 # STANDALONE CONFIGURATION - Load from environment
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "7708509018:AAErAOblRAlC587j1QB4k19PAfDgoiZ3kWk")
 TELEGRAM_CHAT_ID = int(os.getenv("TELEGRAM_CHAT_ID", "7202793910"))
+PERPLEXITY_API_KEY = os.getenv("PERPLEXITY_API_KEY", "")  # Agregamos Perplexity
 BACKEND_URL = os.getenv("BACKEND_URL", "https://ai-agent-backend80.onrender.com/api")
 WC_URL = os.getenv("WC_URL", "https://herramientasyaccesorios.store/wp-json/wc/v3")
 WC_KEY = os.getenv("WC_KEY", "ck_4f50637d85ec404fff441fceb7b113b5050431ea")
@@ -65,6 +66,75 @@ def send_telegram_message(text: str, chat_id: int = None) -> bool:
         return False
 
 
+def query_perplexity(question: str) -> dict:
+    """Consultar Perplexity AI directamente"""
+    try:
+        if not PERPLEXITY_API_KEY:
+            return {
+                "success": False,
+                "error": "Perplexity API key no configurada"
+            }
+        
+        url = "https://api.perplexity.ai/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {PERPLEXITY_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        
+        payload = {
+            "model": "llama-3.1-sonar-small-128k-online",
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "Eres un asistente experto en comercio electrónico, análisis web, SEO y marketing digital. Proporciona respuestas precisas, actuales y con fuentes cuando sea posible."
+                },
+                {
+                    "role": "user", 
+                    "content": question
+                }
+            ],
+            "max_tokens": 1000,
+            "temperature": 0.2,
+            "top_p": 0.9,
+            "return_citations": True,
+            "search_domain_filter": ["herramientasyaccesorios.store"]
+        }
+        
+        logger.info(f"Consultando Perplexity: {question[:50]}...")
+        response = requests.post(url, json=payload, headers=headers, timeout=60)
+        
+        if response.status_code == 200:
+            data = response.json()
+            content = data['choices'][0]['message']['content']
+            
+            # Agregar fuentes si están disponibles
+            citations = data.get('citations', [])
+            if citations:
+                content += "\n\n**Fuentes:**\n"
+                for i, citation in enumerate(citations[:3], 1):
+                    content += f"{i}. {citation}\n"
+            
+            logger.info("✅ Respuesta exitosa de Perplexity")
+            return {
+                "success": True,
+                "content": content,
+                "citations": citations
+            }
+        else:
+            logger.error(f"Error Perplexity: {response.status_code} - {response.text}")
+            return {
+                "success": False,
+                "error": f"Error API: {response.status_code}"
+            }
+            
+    except Exception as e:
+        logger.error(f"Error en Perplexity: {e}")
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+
 def get_woocommerce_product(product_id):
     """Obtener producto de WooCommerce"""
     try:
@@ -79,219 +149,90 @@ def get_woocommerce_product(product_id):
         return None
 
 
-def process_with_ai(product_name, category, base_price):
-    """Procesar producto con backend AI"""
-    try:
-        url = f"{BACKEND_URL}/ai/product/complete"
-        data = {
-            "product_name": product_name,
-            "category": category,
-            "base_price": base_price,
-            "generate_images": True
-        }
-        
-        logger.info(f"Procesando con AI: {product_name}")
-        response = requests.post(url, json=data, timeout=180)
-        
-        if response.status_code == 200:
-            return response.json()
-        
-        logger.error(f"Error AI: {response.status_code} - {response.text}")
-        return None
-    except Exception as e:
-        logger.error(f"Error procesando con AI: {e}")
-        return None
-
-
-def update_woocommerce_product(product_id, ai_result):
-    """Actualizar producto en WooCommerce"""
-    try:
-        url = f"{WC_URL}/products/{product_id}"
-        
-        update_data = {}
-        
-        # Actualizar descripción
-        if ai_result.get('description'):
-            desc = ai_result['description']
-            update_data['description'] = desc.get('description', '')
-            update_data['short_description'] = desc.get('meta_description', '')
-        
-        # Actualizar precio
-        if ai_result.get('pricing'):
-            optimal_price = ai_result['pricing'].get('optimal_price')
-            if optimal_price:
-                update_data['regular_price'] = str(optimal_price)
-        
-        if update_data:
-            response = requests.put(
-                url,
-                json=update_data,
-                auth=(WC_KEY, WC_SECRET),
-                timeout=15
-            )
-            
-            if response.status_code == 200:
-                logger.info(f"Producto {product_id} actualizado en WooCommerce")
-                return True
-        
-        return False
-    except Exception as e:
-        logger.error(f"Error actualizando WooCommerce: {e}")
-        return False
-
-
-def upload_images_to_wordpress(product_id, ai_result):
-    """Subir imágenes a WordPress y asignarlas al producto"""
-    try:
-        images = ai_result.get('images', {}).get('images', [])
-        if not images:
-            return 0
-        
-        image_ids = []
-        
-        for idx, img_data in enumerate(images):
-            img_url = img_data.get('url')
-            if not img_url:
-                continue
-            
-            # Descargar imagen
-            img_response = requests.get(img_url, timeout=30)
-            if img_response.status_code != 200:
-                continue
-            
-            # Subir a WordPress
-            files = {
-                'file': (f'ai-image-{idx+1}.jpg', img_response.content, 'image/jpeg')
-            }
-            
-            wp_response = requests.post(
-                f"{WP_URL}/media",
-                files=files,
-                auth=(WP_USER, WP_PASS),
-                timeout=30
-            )
-            
-            if wp_response.status_code == 201:
-                media_id = wp_response.json().get('id')
-                image_ids.append(media_id)
-                logger.info(f"Imagen {idx+1} subida: ID {media_id}")
-        
-        # Asignar imágenes al producto
-        if image_ids:
-            images_data = [{'id': img_id} for img_id in image_ids]
-            
-            url = f"{WC_URL}/products/{product_id}"
-            response = requests.put(
-                url,
-                json={'images': images_data},
-                auth=(WC_KEY, WC_SECRET),
-                timeout=15
-            )
-            
-            if response.status_code == 200:
-                logger.info(f"{len(image_ids)} imágenes asignadas al producto {product_id}")
-                return len(image_ids)
-        
-        return 0
-    except Exception as e:
-        logger.error(f"Error subiendo imágenes: {e}")
-        return 0
-
-
 def process_command(product_id: int, chat_id: int) -> None:
-    """Procesar comando /procesar"""
-    logger.info(f"Procesando producto {product_id}")
+    """Procesar comando /procesar usando Perplexity"""
+    logger.info(f"Procesando producto {product_id} con Perplexity")
     
-    # Usar el agente inteligente
-    command = f"Procesa el producto {product_id} con AI: genera descripción SEO, calcula precio óptimo, crea 2 imágenes profesionales y actualiza todo en WooCommerce"
+    # Obtener información del producto
+    product = get_woocommerce_product(product_id)
+    if not product:
+        send_telegram_message(f"❌ No se pudo obtener información del producto {product_id}", chat_id)
+        return
+    
+    product_name = product.get('name', 'Producto sin nombre')
+    product_description = product.get('description', '')
+    
+    # Crear prompt para Perplexity
+    prompt = f"""
+    Analiza este producto de herramientas y accesorios:
+    
+    Nombre: {product_name}
+    Descripción actual: {product_description[:200]}...
+    
+    Por favor:
+    1. Genera una descripción SEO optimizada de 150-200 palabras
+    2. Sugiere un precio competitivo basado en productos similares del mercado
+    3. Recomienda 3-5 palabras clave para SEO
+    4. Proporciona 2-3 puntos de venta únicos
+    
+    Enfócate en el mercado español de herramientas.
+    """
     
     try:
-        response = requests.post(
-            f"{BACKEND_URL}/agent/execute",
-            json={
-                "command": command,
-                "user_id": f"telegram_{TELEGRAM_CHAT_ID}"
-            },
-            timeout=180
-        )
+        # Consultar Perplexity
+        result = query_perplexity(prompt)
         
-        if response.status_code == 200:
-            result = response.json()
+        if result['success']:
+            # Enviar resultado formateado
+            mensaje = f"✅ **Análisis del Producto {product_id}**\n\n"
+            mensaje += f"**Producto:** {product_name}\n\n"
+            mensaje += f"**Análisis de IA:**\n{result['content']}\n\n"
+            mensaje += f"🔗 **Ver producto:**\n"
+            mensaje += f"https://herramientasyaccesorios.store/wp-admin/post.php?post={product_id}&action=edit"
             
-            if result.get("success"):
-                # Enviar resultado
-                mensaje = (
-                    f"✅ *{result.get('mensaje', 'Completado')}*\n\n"
-                    f"Plan ejecutado: {result.get('plan', 'N/A')}\n\n"
-                    f"🔗 Ver producto:\n"
-                    f"https://herramientasyaccesorios.store/wp-admin/post.php?post={product_id}&action=edit"
-                )
-                send_telegram_message(mensaje, chat_id)
-                logger.info(f"✅ Producto {product_id} procesado por el agente")
-            else:
-                send_telegram_message(f"❌ Error: {result.get('error', 'Error desconocido')}", chat_id)
+            send_telegram_message(mensaje, chat_id)
+            logger.info(f"✅ Producto {product_id} procesado con Perplexity")
         else:
-            send_telegram_message(f"❌ Error de conexión con el agente", chat_id)
+            send_telegram_message(f"❌ Error procesando con IA: {result['error']}", chat_id)
     
     except Exception as e:
-        logger.error(f"Error usando agente: {e}")
+        logger.error(f"Error procesando comando: {e}")
         send_telegram_message(f"❌ Error: {str(e)}", chat_id)
 
 
 def process_natural_command(command: str, chat_id: int) -> None:
-    """Procesar comando en lenguaje natural usando el agente inteligente"""
+    """Procesar comando en lenguaje natural usando Perplexity"""
     logger.info(f"Comando natural: {command}")
     
     # Notificar que está procesando
     send_telegram_message(f"🧠 *Analizando tu solicitud...*\n\n'{command}'", chat_id)
     
     try:
-        response = requests.post(
-            f"{BACKEND_URL}/agent/execute",
-            json={
-                "command": command,
-                "user_id": f"telegram_{chat_id}"
-            },
-            timeout=180
-        )
+        # Mejorar el prompt con contexto del negocio
+        enhanced_prompt = f"""
+        Contexto: Soy propietario de una tienda online de herramientas y accesorios (herramientasyaccesorios.store) que vende principalmente herramientas eléctricas, manuales y accesorios para bricolaje y profesionales.
         
-        if response.status_code == 200:
-            result = response.json()
+        Solicitud del usuario: {command}
+        
+        Por favor proporciona una respuesta detallada, práctica y específica para mi negocio de herramientas. Si necesitas hacer análisis web, enfócate en el sector de herramientas en España.
+        """
+        
+        result = query_perplexity(enhanced_prompt)
+        
+        if result['success']:
+            # Construir respuesta
+            respuesta = f"✅ **Análisis completado**\n\n"
+            respuesta += result['content']
             
-            if result.get("success"):
-                mensaje = result.get("mensaje", "Procesado")
-                plan = result.get("plan", "")
-                resultados = result.get("resultados", [])
-                
-                # Construir respuesta
-                respuesta = f"✅ *{mensaje}*\n\n"
-                
-                if plan:
-                    respuesta += f"📋 *Plan:* {plan}\n\n"
-                
-                if resultados:
-                    respuesta += "*Resultados:*\n"
-                    for idx, res in enumerate(resultados, 1):
-                        herramienta = res.get("herramienta", "")
-                        resultado_data = res.get("resultado", {})
-                        
-                        if resultado_data.get("success"):
-                            respuesta += f"✓ {herramienta}\n"
-                        else:
-                            respuesta += f"✗ {herramienta}: {resultado_data.get('error', 'Error')}\n"
-                
-                send_telegram_message(respuesta, chat_id)
-                logger.info(f"✅ Comando natural procesado: {command}")
-            else:
-                send_telegram_message(f"❌ Error: {result.get('error', 'Error desconocido')}", chat_id)
+            send_telegram_message(respuesta, chat_id)
+            logger.info(f"✅ Comando natural procesado con Perplexity")
         else:
-            send_telegram_message(f"❌ Error de conexión: {response.status_code}", chat_id)
+            send_telegram_message(f"❌ Error: {result['error']}", chat_id)
     
     except Exception as e:
         logger.error(f"Error en comando natural: {e}")
         send_telegram_message(
-            f"❌ *Error procesando tu solicitud*\n\n"
-            f"Intenta reformular el comando o usa `/ayuda` para ver ejemplos.",
+            f"❌ *Error procesando tu solicitud*\n\n{str(e)}",
             chat_id
         )
 
@@ -302,9 +243,9 @@ def health_check():
     """Health check endpoint"""
     return jsonify({
         "status": "Bot running",
-        "service": "Telegram Bot Webhook",
+        "service": "Telegram Bot Webhook + Perplexity",
         "timestamp": datetime.now().isoformat(),
-        "backend_url": BACKEND_URL
+        "perplexity_configured": bool(PERPLEXITY_API_KEY)
     })
 
 
@@ -346,18 +287,18 @@ def telegram_webhook():
         
         elif text in ['/ayuda', '/start']:
             send_telegram_message(
-                "🤖 *Bot AI - Comandos disponibles*\n\n"
+                "🤖 *Bot AI con Perplexity - Comandos disponibles*\n\n"
                 "*Comandos básicos:*\n"
-                "• `/procesar [ID]` - Procesar producto con AI\n"
+                "• `/procesar [ID]` - Analizar producto con IA\n"
                 "• `/ayuda` - Ver esta ayuda\n\n"
                 "*Comandos en lenguaje natural:*\n"
                 "También puedes escribir en lenguaje natural:\n\n"
-                "• 'Busca 10 herramientas eléctricas tendencia'\n"
-                "• 'Analiza la competencia de sierras'\n"
-                "• 'Crea una campaña para el producto 4146'\n"
-                "• 'Muéstrame los productos sin precio'\n"
-                "• 'Optimiza el SEO del producto 4124'\n\n"
-                "*El bot entenderá y ejecutará tu solicitud* 🧠",
+                "• 'Haz una auditoría de la web herramientasyaccesorios.store'\n"
+                "• 'Busca 10 herramientas eléctricas en tendencia'\n"
+                "• 'Analiza la competencia de sierras circulares'\n"
+                "• 'Qué productos sin stock debo reponer'\n"
+                "• 'Estrategia SEO para mi tienda de herramientas'\n\n"
+                "*Powered by Perplexity AI* 🧠",
                 chat_id
             )
         
@@ -373,7 +314,7 @@ def telegram_webhook():
 
 
 if __name__ == "__main__":
-    logger.info("🚀 Iniciando Cerebro AI Bot (Webhook Version)...")
+    logger.info("🚀 Iniciando Cerebro AI Bot (Webhook + Perplexity)...")
     
     # Verificar configuración
     if not TELEGRAM_TOKEN:
@@ -386,11 +327,11 @@ if __name__ == "__main__":
     
     logger.info(f"✅ Token configurado: {TELEGRAM_TOKEN[:10]}...")
     logger.info(f"✅ Chat ID: {TELEGRAM_CHAT_ID}")
-    logger.info(f"✅ Backend URL: {BACKEND_URL}")
+    logger.info(f"✅ Perplexity: {'Configurado' if PERPLEXITY_API_KEY else 'NO CONFIGURADO'}")
     
     # Enviar mensaje de inicio
     try:
-        send_telegram_message("🤖 *Bot AI activado (Webhook)*\n\nEnvía `/procesar [ID]` para procesar productos.")
+        send_telegram_message("🤖 *Bot AI activado con Perplexity*\n\nEnvía `/ayuda` para ver comandos disponibles.")
         logger.info("✅ Mensaje de inicio enviado")
     except Exception as e:
         logger.warning(f"⚠️ No se pudo enviar mensaje de inicio: {e}")
