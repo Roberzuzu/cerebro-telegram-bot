@@ -1,16 +1,24 @@
 #!/usr/bin/env python3
 """
-Telegram Bot - AI Product Processor
-Escucha comandos de Telegram y procesa productos automáticamente
+Telegram Bot - AI Product Processor (Modern python-telegram-bot)
+Escucha comandos de Telegram y procesa productos automáticamente usando python-telegram-bot
 """
 
 import os
 import sys
-import time
 import json
 import requests
 import logging
+import asyncio
+import threading
 from datetime import datetime
+from typing import Optional
+from http.server import HTTPServer, BaseHTTPRequestHandler
+
+# Telegram Bot imports
+from telegram import Update, Bot
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.constants import ParseMode
 
 # Añadir el directorio actual al path para imports
 sys.path.insert(0, os.path.dirname(__file__))
@@ -44,16 +52,50 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Estado
-last_update_id = None
+# Bot instance (se inicializará en main)
+bot_instance: Optional[Bot] = None
+
+# Health server
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header('Content-type', 'application/json')
+        self.end_headers()
+        response = {
+            "status": "Bot running",
+            "service": "Telegram Bot",
+            "timestamp": datetime.now().isoformat(),
+            "backend_url": BACKEND_URL
+        }
+        self.wfile.write(json.dumps(response).encode())
+    
+    def log_message(self, format, *args):
+        pass  # Suprimir logs HTTP
 
 
-def send_telegram_message(text):
-    """Enviar mensaje a Telegram"""
+async def send_telegram_message_async(text: str, chat_id: Optional[int] = None) -> bool:
+    """Enviar mensaje a Telegram usando python-telegram-bot"""
+    try:
+        target_chat_id = chat_id or TELEGRAM_CHAT_ID
+        if bot_instance:
+            await bot_instance.send_message(
+                chat_id=target_chat_id,
+                text=text,
+                parse_mode=ParseMode.MARKDOWN
+            )
+            return True
+        return False
+    except Exception as e:
+        logger.error(f"Error enviando mensaje: {e}")
+        return False
+
+
+def send_telegram_message(text: str, chat_id: Optional[int] = None) -> bool:
+    """Versión sync de envío de mensaje (para compatibilidad)"""
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
         data = {
-            "chat_id": TELEGRAM_CHAT_ID,
+            "chat_id": chat_id or TELEGRAM_CHAT_ID,
             "text": text,
             "parse_mode": "Markdown"
         }
@@ -62,28 +104,6 @@ def send_telegram_message(text):
     except Exception as e:
         logger.error(f"Error enviando mensaje: {e}")
         return False
-
-
-def get_telegram_updates():
-    """Obtener actualizaciones de Telegram"""
-    global last_update_id
-    
-    try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
-        params = {"timeout": 30}
-        
-        if last_update_id:
-            params["offset"] = last_update_id + 1
-        
-        response = requests.get(url, params=params, timeout=35)
-        data = response.json()
-        
-        if data.get('ok'):
-            return data.get('result', [])
-        return []
-    except Exception as e:
-        logger.error(f"Error obteniendo updates: {e}")
-        return []
 
 
 def get_woocommerce_product(product_id):
@@ -219,8 +239,8 @@ def upload_images_to_wordpress(product_id, ai_result):
         return 0
 
 
-def process_command(product_id):
-    """Procesar comando /procesar"""
+async def process_command_async(product_id: int, update: Update) -> None:
+    """Procesar comando /procesar de forma asíncrona"""
     logger.info(f"Procesando producto {product_id}")
     
     # Usar el agente inteligente
@@ -241,29 +261,34 @@ def process_command(product_id):
             
             if result.get("success"):
                 # Enviar resultado
-                send_telegram_message(
+                mensaje = (
                     f"✅ *{result.get('mensaje', 'Completado')}*\n\n"
                     f"Plan ejecutado: {result.get('plan', 'N/A')}\n\n"
                     f"🔗 Ver producto:\n"
                     f"https://herramientasyaccesorios.store/wp-admin/post.php?post={product_id}&action=edit"
                 )
+                await update.message.reply_text(mensaje, parse_mode=ParseMode.MARKDOWN)
                 logger.info(f"✅ Producto {product_id} procesado por el agente")
             else:
-                send_telegram_message(f"❌ Error: {result.get('error', 'Error desconocido')}")
+                await update.message.reply_text(f"❌ Error: {result.get('error', 'Error desconocido')}")
         else:
-            send_telegram_message(f"❌ Error de conexión con el agente")
+            await update.message.reply_text(f"❌ Error de conexión con el agente")
     
     except Exception as e:
         logger.error(f"Error usando agente: {e}")
-        send_telegram_message(f"❌ Error: {str(e)}")
+        await update.message.reply_text(f"❌ Error: {str(e)}")
 
 
-def process_natural_command(command: str, chat_id: int):
+async def process_natural_command_async(command: str, update: Update) -> None:
     """Procesar comando en lenguaje natural usando el agente inteligente"""
     logger.info(f"Comando natural: {command}")
+    chat_id = update.effective_chat.id
     
     # Notificar que está procesando
-    send_telegram_message(f"🧠 *Analizando tu solicitud...*\n\n'{command}'")
+    await update.message.reply_text(
+        f"🧠 *Analizando tu solicitud...*\n\n'{command}'",
+        parse_mode=ParseMode.MARKDOWN
+    )
     
     try:
         response = requests.post(
@@ -300,26 +325,115 @@ def process_natural_command(command: str, chat_id: int):
                         else:
                             respuesta += f"✗ {herramienta}: {resultado_data.get('error', 'Error')}\n"
                 
-                send_telegram_message(respuesta)
+                await update.message.reply_text(respuesta, parse_mode=ParseMode.MARKDOWN)
                 logger.info(f"✅ Comando natural procesado: {command}")
             else:
-                send_telegram_message(f"❌ Error: {result.get('error', 'Error desconocido')}")
+                await update.message.reply_text(f"❌ Error: {result.get('error', 'Error desconocido')}")
         else:
-            send_telegram_message(f"❌ Error de conexión: {response.status_code}")
+            await update.message.reply_text(f"❌ Error de conexión: {response.status_code}")
     
     except Exception as e:
         logger.error(f"Error en comando natural: {e}")
-        send_telegram_message(
+        await update.message.reply_text(
             f"❌ *Error procesando tu solicitud*\n\n"
-            f"Intenta reformular el comando o usa `/ayuda` para ver ejemplos."
+            f"Intenta reformular el comando o usa `/ayuda` para ver ejemplos.",
+            parse_mode=ParseMode.MARKDOWN
         )
 
 
-def main():
-    """Loop principal"""
-    global last_update_id
+# Handlers del bot
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handler para comando /start y /ayuda"""
+    await update.message.reply_text(
+        "🤖 *Bot AI - Comandos disponibles*\n\n"
+        "*Comandos básicos:*\n"
+        "• `/procesar [ID]` - Procesar producto con AI\n"
+        "• `/ayuda` - Ver esta ayuda\n\n"
+        "*Comandos en lenguaje natural:*\n"
+        "También puedes escribir en lenguaje natural:\n\n"
+        "• 'Busca 10 herramientas eléctricas tendencia'\n"
+        "• 'Analiza la competencia de sierras'\n"
+        "• 'Crea una campaña para el producto 4146'\n"
+        "• 'Muéstrame los productos sin precio'\n"
+        "• 'Optimiza el SEO del producto 4124'\n\n"
+        "*El bot entenderá y ejecutará tu solicitud* 🧠",
+        parse_mode=ParseMode.MARKDOWN
+    )
+
+
+async def procesar_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handler para comando /procesar"""
+    # Verificar chat autorizado
+    if update.effective_chat.id != TELEGRAM_CHAT_ID:
+        logger.warning(f"⚠️ Comando ignorado de chat no autorizado: {update.effective_chat.id}")
+        return
     
-    logger.info("🚀 Iniciando Cerebro AI Bot (Optimizado con colas)...")
+    # Verificar argumentos
+    if context.args and len(context.args) >= 1:
+        try:
+            product_id = int(context.args[0])
+            await process_command_async(product_id, update)
+        except ValueError:
+            await update.message.reply_text(
+                "❌ Formato incorrecto.\n\n"
+                "Usa: `/procesar [ID]`\n"
+                "Ejemplo: `/procesar 4146`"
+            )
+    else:
+        await update.message.reply_text(
+            "❌ Formato incorrecto.\n\n"
+            "Usa: `/procesar [ID]`\n"
+            "Ejemplo: `/procesar 4146`"
+        )
+
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handler para comando /ayuda"""
+    await start_command(update, context)
+
+
+async def natural_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handler para mensajes en lenguaje natural"""
+    # Verificar chat autorizado
+    if update.effective_chat.id != TELEGRAM_CHAT_ID:
+        logger.warning(f"⚠️ Mensaje ignorado de chat no autorizado: {update.effective_chat.id}")
+        return
+    
+    text = update.message.text
+    logger.info(f"📨 Mensaje recibido: {text}")
+    
+    # Procesar como comando natural
+    await process_natural_command_async(text, update)
+
+
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handler global para errores"""
+    logger.error(f"Update {update} caused error {context.error}")
+    
+    if update and update.message:
+        await update.message.reply_text(
+            "❌ *Error interno del bot*\n\n"
+            "Por favor intenta de nuevo en unos momentos.",
+            parse_mode=ParseMode.MARKDOWN
+        )
+
+
+def start_health_server():
+    """Iniciar servidor HTTP para health check"""
+    try:
+        port = int(os.getenv('PORT', 8000))
+        server = HTTPServer(('0.0.0.0', port), HealthHandler)
+        logger.info(f"✅ Servidor HTTP iniciado en puerto {port}")
+        server.serve_forever()
+    except Exception as e:
+        logger.error(f"❌ Error iniciando servidor HTTP: {e}")
+
+
+async def main():
+    """Función principal del bot"""
+    global bot_instance
+    
+    logger.info("🚀 Iniciando Cerebro AI Bot (Optimizado con python-telegram-bot)...")
     
     # Verificar configuración
     if not TELEGRAM_TOKEN or TELEGRAM_TOKEN == "":
@@ -334,93 +448,41 @@ def main():
     logger.info(f"✅ Chat ID: {TELEGRAM_CHAT_ID}")
     logger.info(f"✅ Backend URL: {BACKEND_URL}")
     
+    # Crear aplicación
+    app = Application.builder().token(TELEGRAM_TOKEN).build()
+    bot_instance = app.bot
+    
+    # Agregar handlers
+    app.add_handler(CommandHandler("start", start_command))
+    app.add_handler(CommandHandler("ayuda", help_command))
+    app.add_handler(CommandHandler("procesar", procesar_command))
+    
+    # Handler para mensajes de texto (lenguaje natural)
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, natural_message_handler))
+    
+    # Handler de errores
+    app.add_error_handler(error_handler)
+    
     # Enviar mensaje de inicio
     try:
-        send_telegram_message("🤖 *Bot AI activado*\n\nEnvía `/procesar [ID]` para procesar productos.")
+        await app.bot.send_message(
+            chat_id=TELEGRAM_CHAT_ID,
+            text="🤖 *Bot AI activado*\n\nEnvía `/procesar [ID]` para procesar productos.",
+            parse_mode=ParseMode.MARKDOWN
+        )
         logger.info("✅ Mensaje de inicio enviado")
     except Exception as e:
         logger.warning(f"⚠️ No se pudo enviar mensaje de inicio: {e}")
     
-    consecutive_errors = 0
-    max_consecutive_errors = 5
-    
-    while True:
-        try:
-            updates = get_telegram_updates()
-            
-            if updates:
-                consecutive_errors = 0  # Reset error counter on successful update
-            
-            for update in updates:
-                last_update_id = update.get('update_id')
-                message = update.get('message', {})
-                
-                chat_id = message.get('chat', {}).get('id')
-                text = message.get('text', '')
-                
-                # Solo responder al chat autorizado
-                if chat_id != TELEGRAM_CHAT_ID:
-                    logger.warning(f"⚠️ Mensaje ignorado de chat no autorizado: {chat_id}")
-                    continue
-                
-                logger.info(f"📨 Mensaje recibido: {text}")
-                
-                # Procesar comando /procesar
-                if text.startswith('/procesar'):
-                    parts = text.split()
-                    if len(parts) >= 2 and parts[1].isdigit():
-                        product_id = int(parts[1])
-                        process_command(product_id)
-                    else:
-                        send_telegram_message(
-                            "❌ Formato incorrecto.\n\n"
-                            "Usa: `/procesar [ID]`\n"
-                            "Ejemplo: `/procesar 4146`"
-                        )
-                
-                # Comando /ayuda
-                elif text == '/ayuda' or text == '/start':
-                    send_telegram_message(
-                        "🤖 *Bot AI - Comandos disponibles*\n\n"
-                        "*Comandos básicos:*\n"
-                        "• `/procesar [ID]` - Procesar producto con AI\n"
-                        "• `/ayuda` - Ver esta ayuda\n\n"
-                        "*Comandos en lenguaje natural:*\n"
-                        "También puedes escribir en lenguaje natural:\n\n"
-                        "• 'Busca 10 herramientas eléctricas tendencia'\n"
-                        "• 'Analiza la competencia de sierras'\n"
-                        "• 'Crea una campaña para el producto 4146'\n"
-                        "• 'Muéstrame los productos sin precio'\n"
-                        "• 'Optimiza el SEO del producto 4124'\n\n"
-                        "*El bot entenderá y ejecutará tu solicitud* 🧠"
-                    )
-                
-                # Comando en lenguaje natural (cualquier otro texto)
-                elif not text.startswith('/'):
-                    process_natural_command(text, chat_id)
-            
-            time.sleep(2)  # Esperar 2 segundos entre checks
-            
-        except KeyboardInterrupt:
-            logger.info("🛑 Bot detenido por usuario")
-            send_telegram_message("🛑 Bot detenido")
-            break
-        except requests.exceptions.RequestException as e:
-            consecutive_errors += 1
-            logger.error(f"❌ Error de conexión ({consecutive_errors}/{max_consecutive_errors}): {e}")
-            
-            if consecutive_errors >= max_consecutive_errors:
-                logger.critical("💀 Demasiados errores consecutivos. Reiniciando...")
-                send_telegram_message("⚠️ Bot reiniciándose debido a errores de conexión...")
-                time.sleep(30)  # Esperar 30 segundos antes de reiniciar
-                consecutive_errors = 0
-            else:
-                time.sleep(10)  # Esperar más tiempo si hay error
-        except Exception as e:
-            consecutive_errors += 1
-            logger.error(f"❌ Error en loop principal ({consecutive_errors}/{max_consecutive_errors}): {e}", exc_info=True)
-            time.sleep(10)  # Esperar más tiempo si hay error
+    # Iniciar bot
+    logger.info("🤖 Bot iniciado. Escuchando mensajes...")
+    await app.run_polling(drop_pending_updates=True)
 
 
 if __name__ == "__main__":
-    main()
+    # Iniciar servidor HTTP en background
+    health_thread = threading.Thread(target=start_health_server, daemon=True)
+    health_thread.start()
+    
+    # Iniciar bot principal
+    asyncio.run(main())
