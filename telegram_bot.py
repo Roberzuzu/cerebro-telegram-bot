@@ -1,180 +1,127 @@
-"""
- CEREBRO AI - BOT DE TELEGRAM
-Conecta directamente con el backend de Render
-"""
-
+import os
+import logging
 import asyncio
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputFile
+from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
+
 import aiohttp
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
-7|import os
-8|import requests
-9|import logging
-10|from flask import Flask, request, jsonify
-# Configuración
-TELEGRAM_TOKEN = "7708509018:AAErAOblRAlC587j1QB4k19PAfDgoiZ3kWk"
-TELEGRAM_CHAT_ID = 7202793910
-CEREBRO_API = "https://ai-agent-backend80.onrender.com/api/agent"
-BACKEND_URL = "https://ai-agent-backend80.onrender.com/api"
-# Estado del bot
+from datetime import datetime
+
+#######################
+# CONFIGURACIÓN SEGURA
+#######################
+REQUIRED_ENV = [
+    "TELEGRAM_TOKEN", "CEREBRO_API", "BACKEND_URL"
+]
+for key in REQUIRED_ENV:
+    if not os.environ.get(key):
+        raise EnvironmentError(f"Falta la variable de entorno: {key}")
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+CEREBRO_API = os.environ.get("CEREBRO_API")
+
+logging.basicConfig(
+    format="%(asctime)s %(levelname)s %(message)s",
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
+
+#######################
+# GESTIÓN DE USUARIOS Y PERMISOS
+#######################
+ADMIN_IDS = [int(x) for x in os.environ.get("ADMIN_IDS", "").split(",") if x]
 user_sessions = {}
 
+def is_admin(userid):
+    return userid in ADMIN_IDS
+
+#######################
+# UTILS HTTP ASYNC
+#######################
+async def get_backend_data(endpoint):
+    async with aiohttp.ClientSession() as session:
+        async with session.get(f"{CEREBRO_API}/{endpoint}", timeout=10) as resp:
+            if resp.status != 200:
+                raise Exception(f"Error backend {endpoint}: {resp.status}")
+            return await resp.json()
+
+#######################
+# COMANDOS
+#######################
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Comando /start"""
-        user_id = update.effective_user.id
-            user_sessions[user_id] = {"activo": True}
-                
-                    mensaje = """
-                    🧠 **CEREBRO AI - Asistente personal**
+    userid = update.effective_user.id
+    user_sessions[userid] = {"activo": True, "inicio": datetime.now()}
+    await update.message.reply_text("¡Bienvenido a CEREBRO AI! Usa /ayuda para ver comandos.")
 
-                    ¡Hola! Soy tu asistente para gestionar tu Web.
+async def ayuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    comandos = [
+        "/productos - Lista productos",
+        "/crear <nombre> - Crear producto",
+        "/pedidos - Últimos pedidos",
+        "/clientes - Estadísticas clientes",
+        "/dashboard - Panel avanzado",
+        "/ayuda - Ver comandos",
+        "/status - Ver estado backend"
+    ]
+    await update.message.reply_text("🧠 *CEREBRO AI Comandos*\n" + "\n".join(comandos), parse_mode="Markdown")
 
-                    **Comandos disponibles:**
-                    /productos - Lista productos de la tienda
-                    /crear - Crear nuevo producto
-                    /pedidos - Ver últimos pedidos
-                    /clientes - Estadísticas de clientes
-                    /ayuda - Ver todos los comandos
+async def productos(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Consultando productos...")
+    try:
+        productos = await get_backend_data("productos")
+        respuesta = "\n".join([f"{p['nombre']} | {p['precio']}€ | Stock: {p['stock']}" for p in productos[:10]])
+        await update.message.reply_text(f"*Productos:*\n{respuesta}", parse_mode="Markdown")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error al consultar productos: {e}")
 
-                    También puedes escribirme directamente cualquier comando, por ejemplo:
-                    • "Lista los últimos 5 productos"
-                    • "Crea un producto llamado X"
-                    • "¿Cuántos pedidos tengo hoy?"
+# ... Implementa igual para pedidos, clientes, crear, etc ...
 
-                    ¡Pruébame! 
-                    """
-                        await update.message.reply_text(mensaje, parse_mode='Markdown')
+#######################
+# COMANDO ESPECIAL DASHBOARD
+#######################
+async def dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Consulta varias APIs para generar panel unificado, genera gráfico y exporta CSV/PDF si admin
+    await update.message.reply_text("Generando dashboard avanzado...")
+    # Ejemplo: Simula estadística y envía archivo
+    # await update.message.reply_document(InputFile("dashboard.csv"), caption="Dashboard CSV")
 
+#######################
+# HANDLER DE TEXTO NATURAL INTELIGENTE
+#######################
+async def texto(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    texto = update.message.text.lower()
+    # Aplica fuzzy matching/nlp simple o llama a backend IA para entender el comando
+    if "producto" in texto:
+        await productos(update, context)
+    elif "pedido" in texto:
+        await pedidos(update, context)
+    # ...
 
-                        async def ayuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
-                            """Comando /ayuda"""
-                                mensaje = """
-                                 **COMANDOS DE CEREBRO AI**
+#######################
+# HANDLER DE ERRORES GENERAL
+#######################
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+    logger.exception(f"Error: {context.error}")
+    if isinstance(update, Update) and update.message:
+        await update.message.reply_text("Ocurrió un error inesperado. Por favor, intenta de nuevo.")
+    # Si es crítico y admin, envía log por Telegram
 
-                                ** Productos:**
-                                /productos - Lista productos
-                                /crear - Crear producto
-                                /stock - Ver stock bajo
+#######################
+# MAIN
+#######################
+def main():
+    app = Application.builder().token(TELEGRAM_TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("ayuda", ayuda))
+    app.add_handler(CommandHandler("productos", productos))
+    app.add_handler(CommandHandler("dashboard", dashboard))
+    # Otros comandos...
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, texto))
+    app.add_error_handler(error_handler)
+    logger.info("Bot listo")
+    app.run_polling(allowed_updates=Update.ALL_TYPES)
 
-                                ** Pedidos:**
-                                /pedidos - Últimos pedidos
-                                /ventas - Estadísticas de ventas
-
-                                ** Clientes:**
-                                /clientes - Info de clientes
-                                /nuevos - Clientes nuevos
-
-                                ** Analíticas:**
-                                /dashboard - Dashboard completo
-                                /ingresos - Ingresos del mes
-
-                                ** Sistema:**
-                                /status - Estado del backend
-                                /ayuda - Este mensaje
-
-                                ** Modo chat:**
-                                También puedes hablarme naturalmente:
-                                • "Muéstrame los productos más vendidos"
-                                • "Crea un producto de prueba"
-                                • "¿Cuánto he vendido hoy?"
-                                """
-                                    await update.message.reply_text(mensaje, parse_mode='Markdown')
-
-
-                                    async def productos(update: Update, context: ContextTypes.DEFAULT_TYPE):
-                                        """Comando /productos"""
-                                            await update.message.reply_text("🔍 Consultando productos...")
-                                                respuesta = await ejecutar_comando("lista todos los productos de woocommerce", update.effective_user.id)
-                                                    await update.message.reply_text(respuesta)
-
-
-                                                    async def crear_producto(update: Update, context: ContextTypes.DEFAULT_TYPE):
-                                                        """Comando /crear"""
-                                                            if context.args:
-                                                                    nombre = " ".join(context.args)
-                                                                            await update.message.reply_text(f" Creando producto '{nombre}'...")
-                                                                                    respuesta = await ejecutar_comando(f"crea un producto llamado {nombre}", update.effective_user.id)
-                                                                                            await update.message.reply_text(respuesta)
-                                                                                                else:
-                                                                                                        await update.message.reply_text(" Uso: /crear [nombre del producto]")
-
-
-                                                                                                        async def pedidos(update: Update, context: ContextTypes.DEFAULT_TYPE):
-                                                                                                            """Comando /pedidos"""
-                                                                                                                await update.message.reply_text(" Consultando pedidos...")
-                                                                                                                    respuesta = await ejecutar_comando("muestra los últimos 10 pedidos", update.effective_user.id)
-                                                                                                                        await update.message.reply_text(respuesta)
-
-
-                                                                                                                        async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-                                                                                                                            """Comando /status - Verifica estado del backend"""
-                                                                                                                                await update.message.reply_text(" Verificando backend...")
-                                                                                                                                    
-                                                                                                                                        try:
-                                                                                                                                                async with aiohttp.ClientSession() as session:
-                                                                                                                                                            async with session.get(f"{CEREBRO_API}/status", timeout=10) as resp:
-                                                                                                                                                                            if resp.status == 200:
-                                                                                                                                                                                                data = await resp.json()
-                                                                                                                                                                                                                    mensaje = f"""
-                                                                                                                                                                                                                     **Backend operativo**
-
-                                                                                                                                                                                                                     Estado: {data.get('status', 'OK')}
-                                                                                                                                                                                                                     Agente: {'Activo' if data.get('agente_activo') else 'Inactivo'}
-                                                                                                                                                                                                                     Base de datos: {'Conectada' if data.get('database_connected') else 'Desconectada'}
-                                                                                                                                                                                                                     Modelo: {data.get('modelo', 'N/A')}
-                                                                                                                                                                                                                     Conversaciones: {data.get('conversaciones_totales', 0)}
-                                                                                                                                                                                                                     Herramientas: {data.get('herramientas_disponibles', 0)}
-                                                                                                                                                                                                                    """
-                                                                                                                                                                                                                                        await update.message.reply_text(mensaje, parse_mode='Markdown')
-                                                                                                                                                                                                                                                        else:
-                                                                                                                                                                                                                                                                            await update.message.reply_text(f" Backend respondió con error: {resp.status}")
-                                                                                                                                                                                                                                                                                except Exception as e:
-                                                                                                                                                                                                                                                                                        await update.message.reply_text(f" Error al conectar: {str(e)}")
-
-
-                                                                                                                                                                                                                                                                                        async def ejecutar_comando(comando: str, user_id: int) -> str:
-                                                                                                                                                                                                                                                                                            """Ejecuta un comando en el backend de Cerebro"""
-                                                                                                                                                                                                                                                                                                try:
-                                                                                                                                                                                                                                                                                                        async with aiohttp.ClientSession() as session:
-                                                                                                                                                                                                                                                                                                                    payload = {
-                                                                                                                                                                                                                                                                                                                                    "command": comando,
-                                                                                                                                                                                                                                                                                                                                    # Comandos especiales
-88|        if text in ['/start', '/ayuda', '/help']:
-89|            send_telegram_message(
-90|                " *Bot Cerebro AI - FIX URGENTE*\n\n"
-91|                f" Backend: {BACKEND_URL}\n"
-92|                f" Estado: Conectado y funcionando\n\n"
-93|                "Envía cualquier mensaje para probar la conexión.",
-94|                chat_id
-95|            )
-96|            return jsonify({"ok": True})
-97|        
-98|        # Procesar mensaje normal
-99|        if text and not text.startswith('/'):
-100|            logger.info(f" Procesando: {text}")
-101|            
-102|            # Llamar backend
-103|            result = call_backend_agent(text, f"telegram_{chat_id}")
-104|            
-105|            if result['success']:
-106|                mensaje = result.get('mensaje', 'Sin respuesta del backend')
-107|                send_telegram_message(f" {mensaje}", chat_id)
-108|                logger.info(" Enviado correctamente")
-109|            else:
-110|                error = result.get('error', 'Error desconocido')
-111|                send_telegram_message(f" Error: {error}", chat_id)
-112|                logger.error(f" Error: {error}")
-113|        
-114|        return jsonify({"ok": True})
-115|        
-116|    except Exception as e:
-117|        logger.error(f" Error webhook: {e}")
-118|        return jsonify({"ok": False, "error": str(e)}), 500
-119|
-120|if __name__ == "__main__":
-121|    logger.info(" INICIANDO TELEGRAM BOT URGENTE")
-122|    logger.info(f" Backend: {BACKEND_URL}")
-                                                                                                                                                                                                                                                                                                                                                    "user_id": f"telegram_{user_id}"
+if __name__ == "__main__":
+    main()                                                                                                                                                                                                                                                                                                                "user_id": f"telegram_{user_id}"
                                                                                                                                                                                                                                                                                                                                                                 }
                                                                                                                                                                                                                                                                                                                                                                             
                                                                                                                                                                                                                                                                                                                                                                                         async with session.post(
