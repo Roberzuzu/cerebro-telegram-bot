@@ -94,50 +94,6 @@ if __name__ == "__main__":
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 # Mensajes de texto
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, manejar_mensaje))
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         # Procesar mensaje normal
-99|        if text and not text.startswith('/'):
-100|            logger.info(f" Procesando: {text}")
-101|            
-102|            # Llamar backend
-103|            result = call_backend_agent(text, f"telegram_{chat_id}")
-104|            
-105|            if result['success']:
-106|                mensaje = result.get('mensaje', 'Sin respuesta del backend')
-107|                send_telegram_message(f" {mensaje}", chat_id)
-108|                logger.info(" Enviado correctamente")
-109|            else:
-110|                error = result.get('error', 'Error desconocido')
-111|                send_telegram_message(f" Error: {error}", chat_id)
-112|                logger.error(f" Error: {error}")
-113|        
-114|        return jsonify({"ok": True})
-115|        
-116|    except Exception as e:
-117|        logger.error(f" Error webhook: {e}")
-118|        return jsonify({"ok": False, "error": str(e)}), 500
-119|
-120|if __name__ == "__main__":
-121|    logger.info(" INICIANDO TELEGRAM BOT URGENTE")
-122|    logger.info(f" Backend: {BACKEND_URL}")
-123|    
-124|    # Test inicial
-125|    try:
-126|        test_response = requests.get(f"https://ai-agent-backend80.onrender.com/api/agent/status", timeout=10)
-127|        if test_response.status_code == 200:
-128|            logger.info(" Backend verificado")
-129|            send_telegram_message(" *Bot fix urgente activado y conectado*")
-130|        else:
-131|            logger.warning(f" Backend respondió: {test_response.status_code}")
-132|    except Exception as e:
-133|        logger.error(f" No se pudo verificar backend: {e}")
-134|    
-135|    port = int(os.environ.get('PORT', 8000))
-136|    app.run(host='0.0.0.0', port=port, debug=False)
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            # Error handler
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                app.add_error_handler(error_handler)
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        # Iniciar
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            print(" Bot iniciado. Esperando mensajes...")
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 if __name__ == "__main__":
