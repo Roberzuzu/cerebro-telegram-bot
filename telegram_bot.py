@@ -19,7 +19,6 @@ async def setvar(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def gestion(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     texto = update.message.text
-    # Construye payload con variables personales para el backend
     payload = {
         "command": texto,
         "user_id": f"telegram_{user_id}",
@@ -39,6 +38,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
  from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
