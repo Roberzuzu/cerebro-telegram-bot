@@ -1,81 +1,19 @@
-"""
-CEREBRO AI - BOT DE TELEGRAM
-Conecta directamente con https://ai-agent-backend80.onrender.com y Perplexity.
-"""
-from fastapi import HTTPException
 import os
 import aiohttp
+import asyncio
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CEREBRO_API = os.environ.get("CEREBRO_API")
 
-async def ejecutar_comando(comando: str, telegram_user_id: int) -> str:
-    payload = {
-        "command": comando,
-        "user_id": f"telegram_{telegram_user_id}"
-    }
-    async with aiohttp.ClientSession() as session:
-        async with session.post(f"{CEREBRO_API}/execute", json=payload, timeout=30) as resp:
-            data = await resp.json()
-            return data.get('mensaje') or str(data)
-
-async def manejar_mensaje(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    texto = update.message.text
-    await update.message.reply_text("Procesando...")
-    respuesta = await ejecutar_comando(texto, user_id)
-    await update.message.reply_text(respuesta)
-
-def main():
-    app = Application.builder().token(TELEGRAM_TOKEN).build()
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, manejar_mensaje))
-    print("Bot listo.")
-    app.run_polling()
-
-if __name__ == "__main__":
-    main()
-
-import asyncio
-import logging
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
-
-# ------------------- CONFIGURACIÓN SEGURA --------------------
-TELEGRAM_TOKEN      = os.environ.get("TELEGRAM_TOKEN")
-CEREBRO_API         = os.environ.get("CEREBRO_API")    # Ej: https://ai-agent-backend80.onrender.com/api/agent
-BACKEND_URL         = os.environ.get("BACKEND_URL")    # Ej: https://ai-agent-backend80.onrender.com/api
-PERPLEXITY_API_KEY  = os.environ.get("PERPLEXITY_API_KEY")
-
-# ------------------- LOGGING -------------------------------
-logging.basicConfig(
-    format="%(asctime)s %(levelname)s %(message)s",
-    level=logging.INFO
-)
-logger = logging.getLogger(__name__)
-
-# ------------------- ESTADO DE USUARIOS --------------------
-user_sessions = {}
-
-# ------------------- UTILS DE COMUNICACIÓN ----------------
-async def get_external_saas(url, params=None):
-    """Conexión ultra-flexible a cualquier API externa/interna/SaaS (GET)"""
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url, params=params or {}, timeout=20) as resp:
-            if resp.status == 200:
-                return await resp.json()
-            else:
-                error = await resp.text()
-                return {"error": error}
-
-async def ejecutar_comando(comando: str, telegram_user_id: int) -> str:
-    """Ejecuta comando en tu backend Cerebro."""
-    payload = {
-        "command": comando,
-        "user_id": f"telegram_{telegram_user_id}"
-    }
+# Ejecutar comandos en el backend universal
+async def ejecutar_comando(comando: str, user_id: int) -> str:
     try:
+        payload = {
+            "command": comando,
+            "user_id": f"telegram_{user_id}"
+        }
         async with aiohttp.ClientSession() as session:
             async with session.post(f"{CEREBRO_API}/execute", json=payload, timeout=30) as resp:
                 if resp.status == 200:
@@ -85,147 +23,54 @@ async def ejecutar_comando(comando: str, telegram_user_id: int) -> str:
                     error_text = await resp.text()
                     return f"Error {resp.status}: {error_text}"
     except asyncio.TimeoutError:
-        return "⏱ Timeout: El backend tardó demasiado en responder"
+        return "⏱ Timeout: El servidor tardó demasiado en responder"
     except Exception as e:
         return f"Error de conexión: {str(e)}"
 
-async def get_perplexity_answer(prompt: str) -> str:
-    """Consulta IA Perplexity y devuelve respuesta."""
-    url = "https://api.perplexity.ai/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {PERPLEXITY_API_KEY}",
-        "Content-Type": "application/json"
-    }
-    body = {
-        "model": "pplx-70b-chat",
-        "messages": [{"role": "user", "content": prompt}]
-    }
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, headers=headers, json=body, timeout=40) as resp:
-                if resp.status == 200:
-                    result = await resp.json()
-                    return result['choices'][0]['message']['content']
-                err = await resp.text()
-                return f"Error IA {resp.status}: {err}"
-    except Exception as e:
-        return f"Error con IA: {e}"
-
-# ------------------- HANDLERS DE COMANDOS -----------------
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    user_sessions[user_id] = {"activo": True}
     mensaje = (
         "¡Bienvenido a *CEREBRO AI*!\n"
-        "Escribe /ayuda para ver todos los comandos disponibles o háblame en lenguaje natural."
+        "Usa /ayuda para ver comandos disponibles o háblame en lenguaje natural."
     )
     await update.message.reply_text(mensaje, parse_mode="Markdown")
 
 async def ayuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
     comandos = [
         "/productos - Lista productos",
-        "/crear - Crear producto",
-        "/pedidos - Ver últimos pedidos",
+        "/crear [nombre] - Crear producto",
+        "/pedidos - Últimos pedidos",
         "/clientes - Estadísticas de clientes",
-        "/status - Ver estado backend",
-        "/ayuda - Ver todos los comandos",
-        "\nModo IA: Escribe lo que quieras saber, por ejemplo:",
-        "• \"¿Cuánto he vendido hoy?\"",
-        "• \"Crea un producto llamado Taladro Makita\""
+        "/status - Estado del backend",
+        "/ayuda - Ver todos los comandos"
     ]
     msg = "🧠 *Comandos CEREBRO AI*\n" + "\n".join(comandos)
     await update.message.reply_text(msg, parse_mode="Markdown")
 
-async def productos(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🔍 Consultando productos...")
-    respuesta = await ejecutar_comando("lista los productos", update.effective_user.id)
-    await update.message.reply_text(respuesta)
-
-async def crear(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    argumentos = context.args
-    if not argumentos:
-        await update.message.reply_text("Uso: /crear [nombre del producto]")
-        return
-    nombre = " ".join(argumentos)
-    await update.message.reply_text(f"Creando producto '{nombre}'...")
-    respuesta = await ejecutar_comando(f"crea un producto llamado {nombre}", update.effective_user.id)
-    await update.message.reply_text(respuesta)
-
-async def pedidos(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Consultando pedidos...")
-    respuesta = await ejecutar_comando("muestra los últimos 10 pedidos", update.effective_user.id)
-    await update.message.reply_text(respuesta)
-
-async def clientes(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Consultando clientes...")
-    respuesta = await ejecutar_comando("estadísticas de clientes", update.effective_user.id)
-    await update.message.reply_text(respuesta)
-
-async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Verificando estado del backend...")
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(f"{CEREBRO_API}/status", timeout=10) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    mensaje = (
-                        f"*Backend operativo*\n"
-                        f"Estado: {data.get('status', 'OK')}\n"
-                        f"Agente: {'Activo' if data.get('agente_activo') else 'Inactivo'}\n"
-                        f"Base de datos: {'Conectada' if data.get('database_connected') else 'Desconectada'}\n"
-                        f"Modelo: {data.get('modelo', 'N/A')}\n"
-                        f"Conversaciones: {data.get('conversaciones_totales', 0)}\n"
-                        f"Herramientas: {data.get('herramientas_disponibles', 0)}"
-                    )
-                    await update.message.reply_text(mensaje, parse_mode="Markdown")
-                else:
-                    await update.message.reply_text(f"Backend respondió con error: {resp.status}")
-    except Exception as e:
-        await update.message.reply_text(f"Error al conectar: {str(e)}")
-
 async def manejar_mensaje(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Maneja mensajes en lenguaje natural (IA o backend)"""
     user_id = update.effective_user.id
     texto = update.message.text
     await update.message.reply_text("Procesando...")
-    # Primero prueba como comando backend
-    backend_respuesta = await ejecutar_comando(texto, user_id)
-    if backend_respuesta and "Error" not in backend_respuesta:
-        await update.message.reply_text(backend_respuesta)
-        return
-    # Si el backend no responde, consulta IA
-    ia_respuesta = await get_perplexity_answer(texto)
-    await update.message.reply_text(ia_respuesta)
+    respuesta = await ejecutar_comando(texto, user_id)
+    await update.message.reply_text(respuesta)
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     print(f"Error: {context.error}")
     if update and update.message:
         await update.message.reply_text(f"Ocurrió un error inesperado: {context.error}")
 
-# ------------------- MAIN -----------------
-
 def main():
     print("Iniciando Cerebro AI Bot...")
     app = Application.builder().token(TELEGRAM_TOKEN).build()
-    # Handlers de comandos
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("ayuda", ayuda))
-    app.add_handler(CommandHandler("productos", productos))
-    app.add_handler(CommandHandler("crear", crear))
-    app.add_handler(CommandHandler("pedidos", pedidos))
-    app.add_handler(CommandHandler("clientes", clientes))
-    app.add_handler(CommandHandler("status", status))
-    # Handler para mensajes en lenguaje natural
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, manejar_mensaje))
-    # Handler de errores
     app.add_error_handler(error_handler)
     print("Bot listo. Esperando mensajes...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
-    main()                                                                                                                                                                                                                                                                                      "user_id": f"telegram_{user_id}"
-                                                                                                                                                                                                                                                                                                                                                                }
+    main()
+                                                                                                                                                                                                                                                                                                                             }
                                                                                                                                                                                                                                                                                                                                                                             
                                                                                                                                                                                                                                                                                                                                                                                         async with session.post(
                                                                                                                                                                                                                                                                                                                                                                                                         f"{CEREBRO_API}/execute",
