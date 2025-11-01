@@ -39,75 +39,37 @@ def main():
 
 if __name__ == "__main__":
     main()
-  import os
+
+ from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 import aiohttp
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
 
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-BACKEND_URL = os.environ.get("BACKEND_URL")
-user_vars = {}
+app = FastAPI()
 
-async def setvar(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if len(context.args) < 2:
-        await update.message.reply_text("Uso: /setvar clave valor")
-        return
-    key, value = context.args[0], " ".join(context.args[1:])
-    user_vars[update.effective_user.id] = user_vars.get(update.effective_user.id, {})
-    user_vars[update.effective_user.id][key] = value
-    await update.message.reply_text(f"🔧 Variable '{key}' configurada como '{value}'.")
-
-async def gestion(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    texto = update.message.text
-    # Construye payload con variables personales para el backend
-    payload = {
-        "command": texto,
-        "user_id": f"telegram_{user_id}",
-        "vars": user_vars.get(user_id, {})
-    }
-    async with aiohttp.ClientSession() as session:
-        async with session.post(f"{BACKEND_URL}/agent/execute", json=payload, timeout=30) as resp:
-            data = await resp.json()
-            respuesta = data.get('mensaje') or str(data)
-            await update.message.reply_text(respuesta)
-
-def main():
-    app = Application.builder().token(TELEGRAM_TOKEN).build()
-    app.add_handler(CommandHandler("setvar", setvar))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, gestion))
-    app.run_polling()
-
-if __name__ == "__main__":
-    main()
-    @app.post("/agent/execute")
+@app.post("/agent/execute")
 async def execute_command(payload: dict):
     texto = payload.get("command", "").lower()
     user_vars = payload.get("vars", {})
 
-    # Ejemplo routing dinámico conectando recursos/configuraciones por variable
+    # Ejemplo de integración dinámica por variable
     if user_vars.get("endpoint_woo"):
         wc_url = user_vars.get("endpoint_woo")
         wc_resp = await get_external_saas(wc_url)
-        return {"mensaje": f"Productos WooCommerce conectados a {wc_url}: {wc_resp}"}
+        return JSONResponse(content={"mensaje": f"Productos WooCommerce conectados a {wc_url}: {wc_resp}"})
 
     if user_vars.get("api_key_stripe"):
-        # Aquí podrías hacer llamada a Stripe con api_key_stripe del usuario (ejemplo)
         stripe_key = user_vars.get("api_key_stripe")
-        # Implementa lógica real con Stripe SDK o requests
+        # Aquí podrías hacer llamada a Stripe usando stripe_key
 
     if user_vars.get("curso_api"):
         curso_url = user_vars.get("curso_api")
         cursos = await get_external_saas(curso_url)
-        return {"mensaje": f"Cursos disponibles: {cursos}"}
+        return JSONResponse(content={"mensaje": f"Cursos disponibles: {cursos}"})
 
-    # Extiende para cualquier otro recurso: miembros, analítica, membresías, email, plugins, etc.
-
-    # Si no hay variables específicas, o comando ambiguo -> IA fallback
+    # Si no hay variables específicas, IA fallback
     ia_response = await get_perplexity_response(texto)
-    return {"mensaje": ia_response}
+    return JSONResponse(content={"mensaje": ia_response})
 
-import aiohttp
 async def get_external_saas(url, params=None):
     async with aiohttp.ClientSession() as session:
         async with session.get(url, params=params or {}, timeout=20) as resp:
@@ -116,6 +78,7 @@ async def get_external_saas(url, params=None):
             else:
                 error = await resp.text()
                 return {"error": error}
+
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                return data.get('mensaje') or data.get('message') or data.get('respuesta') or str(data)
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             else:
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 error_text = await resp.text()
