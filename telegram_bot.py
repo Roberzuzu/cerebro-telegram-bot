@@ -183,8 +183,7 @@ def main():
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
-    main()
-                                                                                                                                                                                                                                                                                      "user_id": f"telegram_{user_id}"
+    main()                                                                                                                                                                                                                                                                                      "user_id": f"telegram_{user_id}"
                                                                                                                                                                                                                                                                                                                                                                 }
                                                                                                                                                                                                                                                                                                                                                                             
                                                                                                                                                                                                                                                                                                                                                                                         async with session.post(
