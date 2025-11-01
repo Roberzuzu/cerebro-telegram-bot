@@ -2,9 +2,41 @@
 CEREBRO AI - BOT DE TELEGRAM
 Conecta directamente con https://ai-agent-backend80.onrender.com y Perplexity.
 """
-
+from fastapi import HTTPException
 import os
 import aiohttp
+from telegram import Update
+from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
+
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+CEREBRO_API = os.environ.get("CEREBRO_API")
+
+async def ejecutar_comando(comando: str, telegram_user_id: int) -> str:
+    payload = {
+        "command": comando,
+        "user_id": f"telegram_{telegram_user_id}"
+    }
+    async with aiohttp.ClientSession() as session:
+        async with session.post(f"{CEREBRO_API}/execute", json=payload, timeout=30) as resp:
+            data = await resp.json()
+            return data.get('mensaje') or str(data)
+
+async def manejar_mensaje(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    texto = update.message.text
+    await update.message.reply_text("Procesando...")
+    respuesta = await ejecutar_comando(texto, user_id)
+    await update.message.reply_text(respuesta)
+
+def main():
+    app = Application.builder().token(TELEGRAM_TOKEN).build()
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, manejar_mensaje))
+    print("Bot listo.")
+    app.run_polling()
+
+if __name__ == "__main__":
+    main()
+
 import asyncio
 import logging
 from telegram import Update
@@ -27,6 +59,15 @@ logger = logging.getLogger(__name__)
 user_sessions = {}
 
 # ------------------- UTILS DE COMUNICACIÓN ----------------
+async def get_external_saas(url, params=None):
+    """Conexión ultra-flexible a cualquier API externa/interna/SaaS (GET)"""
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url, params=params or {}, timeout=20) as resp:
+            if resp.status == 200:
+                return await resp.json()
+            else:
+                error = await resp.text()
+                return {"error": error}
 
 async def ejecutar_comando(comando: str, telegram_user_id: int) -> str:
     """Ejecuta comando en tu backend Cerebro."""
